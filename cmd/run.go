@@ -1,16 +1,12 @@
-/*
-Copyright © 2024 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
-	"fmt"
+	"blockchain-indexer/internal/indexer"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-// runCmd represents the run command
 var (
 	rpc    string
 	start  int
@@ -20,7 +16,12 @@ var (
 		Use:   "run",
 		Short: "Start an indexer",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("run called")
+			indexer.Start(
+				viper.GetString("rpc"),
+				viper.GetInt("start"),
+				viper.GetString("out"),
+				viper.GetInt("limit"),
+			)
 		},
 	}
 )
