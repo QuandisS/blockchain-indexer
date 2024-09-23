@@ -21,17 +21,15 @@ type BlockInfo struct {
 	Timestamp uint64
 }
 
+// Start an indexer.
+//
+// The indexer will start indexing blocks from the given `start` block number to
+// `start+limit-1` block number.
+//
+// The indexer will retry skipped blocks (if any) until all blocks are indexed.
 func Start(rpc string, start uint64, out string, limit uint64, workers int) {
-	if start < 1 {
-		log.Fatal("Start block must be greater than 0")
-	}
-
-	if limit < 1 {
-		log.Fatal("Block limit must be greater than 0")
-	}
-
-	if workers < 1 {
-		log.Fatal("Workers count must be greater than 0")
+	if err := validateOptions(start, limit, workers); err != nil {
+		log.Fatal(err)
 	}
 
 	client, err := ethclient.Dial(rpc)
@@ -151,6 +149,8 @@ newBlocksLoop:
 	log.Println("Done!")
 }
 
+// startWorker is a worker goroutine function that indexes the given blocks and sends the BlockInfo to the out channel.
+// It skips blocks that are not planned for indexing and logs errors if it fails to get a block.
 func startWorker(client *ethclient.Client, blockToIndexNumCh <-chan uint64, wg *sync.WaitGroup, isBlockIndexedMap *sync.Map, out chan<- BlockInfo) {
 	for blockNum := range blockToIndexNumCh {
 		// skip block if it is not planned for indexing
@@ -175,6 +175,9 @@ func startWorker(client *ethclient.Client, blockToIndexNumCh <-chan uint64, wg *
 	wg.Done()
 }
 
+// writeBlocksToFile writes the blocks to the given file in order of block number.
+// It consumes the given channel, which should be closed when all blocks have been indexed.
+// The file is opened in append mode, so if the file already contains blocks, they will not be overwritten.
 func writeBlocksToFile(start uint64, blockInfoChan <-chan BlockInfo, out string, finished chan<- struct{}) {
 	file, err := os.OpenFile(out, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -203,4 +206,18 @@ func writeBlocksToFile(start uint64, blockInfoChan <-chan BlockInfo, out string,
 		}
 	}
 	finished <- struct{}{}
+}
+
+// validateOptions validates the given options and returns an error if any of them are invalid.
+func validateOptions(start, limit uint64, workers int) error {
+	if start < 1 {
+		return fmt.Errorf("start must be greater than 0")
+	}
+	if limit < 1 {
+		return fmt.Errorf("limit must be greater than 0")
+	}
+	if workers < 1 {
+		return fmt.Errorf("workers must be greater than 0")
+	}
+	return nil
 }
