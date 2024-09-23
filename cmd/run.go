@@ -9,18 +9,18 @@ import (
 
 var (
 	rpc    string
-	start  int
+	start  uint64
 	out    string
-	limit  int
+	limit  uint64
 	runCmd = &cobra.Command{
 		Use:   "run",
 		Short: "Start an indexer",
 		Run: func(cmd *cobra.Command, args []string) {
 			indexer.Start(
 				viper.GetString("rpc"),
-				viper.GetInt("start"),
+				viper.GetUint64("start"),
 				viper.GetString("out"),
-				viper.GetInt("limit"),
+				viper.GetUint64("limit"),
 			)
 		},
 	}
@@ -30,9 +30,9 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 
 	runCmd.PersistentFlags().StringVar(&rpc, "rpc", "", "RPC endpoint")
-	runCmd.PersistentFlags().IntVar(&start, "start", 0, "Start block")
+	runCmd.PersistentFlags().Uint64Var(&start, "start", 0, "Start block")
 	runCmd.PersistentFlags().StringVar(&out, "out", "", "Output file")
-	runCmd.PersistentFlags().IntVar(&limit, "limit", 0, "Block limit for indexing")
+	runCmd.PersistentFlags().Uint64Var(&limit, "limit", 0, "Block limit for indexing")
 	runCmd.MarkPersistentFlagRequired("rpc")
 
 	viper.BindPFlag("rpc", runCmd.PersistentFlags().Lookup("rpc"))

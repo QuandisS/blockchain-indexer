@@ -6,12 +6,14 @@ import (
 	"math/big"
 	"sync"
 
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 const workerNum = 5
 
-func Start(rpc string, start int, out string, limit int) {
+func Start(rpc string, start uint64, out string, limit uint64) {
 	client, err := ethclient.Dial(rpc)
 
 	if err != nil {
@@ -24,29 +26,59 @@ func Start(rpc string, start int, out string, limit int) {
 		log.Fatal("Failed to get last block number: ", err)
 	}
 
-	if uint64(start+limit) <= lastBlockNum {
-		log.Println("Indexing from block: ", start, " to block: ", start+limit)
-		blockToIndexNumCh := make(chan int)
-
-		wg := &sync.WaitGroup{}
-		for i := 0; i < workerNum; i++ {
-			log.Println("Starting worker: ", i)
-			wg.Add(1)
-			go startWorker(client, blockToIndexNumCh, wg)
+	newBlockChan := make(chan *types.Header)
+	var sub ethereum.Subscription
+	if uint64(start+limit) > lastBlockNum {
+		sub, err = client.SubscribeNewHead(context.Background(), newBlockChan)
+		if err != nil {
+			log.Fatal("Failed to subscribe new blocks (use WebSockets connection instead?): ", err)
 		}
-
-		for blockNum := start; blockNum < start+limit; blockNum++ {
-			blockToIndexNumCh <- blockNum
-		}
-
-		close(blockToIndexNumCh)
-
-		wg.Wait()
-		log.Println("Indexing finished")
 	}
+
+	log.Println("Indexing from block: ", start, " to block: ", start+limit)
+	blockToIndexNumCh := make(chan uint64)
+
+	wg := &sync.WaitGroup{}
+	for i := 0; i < workerNum; i++ {
+		log.Println("Starting worker: ", i)
+		wg.Add(1)
+		go startWorker(client, blockToIndexNumCh, wg)
+	}
+
+	for blockNum := start; (blockNum <= lastBlockNum) && (blockNum <= start+limit); blockNum++ {
+		blockToIndexNumCh <- blockNum
+	}
+
+	newBlocksToIndexCount := int64(start + limit - lastBlockNum)
+
+newBlocksLoop:
+	for {
+		if newBlocksToIndexCount <= 0 {
+			break
+		}
+		log.Println("Waiting for new blocks...")
+		select {
+		case newBlock := <-newBlockChan:
+			log.Println("New block received: ", newBlock.Number.Uint64())
+			blockToIndexNumCh <- newBlock.Number.Uint64()
+			newBlocksToIndexCount--
+			if newBlocksToIndexCount == 0 {
+				break newBlocksLoop
+			}
+
+		case err := <-sub.Err():
+			log.Println("Subscription error: ", err)
+			break newBlocksLoop
+		}
+	}
+
+	close(blockToIndexNumCh)
+	wg.Wait()
+	log.Println("Indexing finished")
+
 }
 
-func startWorker(client *ethclient.Client, blockToIndexNumCh <-chan int, wg *sync.WaitGroup) {
+func startWorker(client *ethclient.Client, blockToIndexNumCh <-chan uint64, wg *sync.WaitGroup) {
 	for blockNum := range blockToIndexNumCh {
 		block, err := client.BlockByNumber(context.Background(), big.NewInt(int64(blockNum)))
 		if err != nil {
