@@ -141,6 +141,7 @@ newBlocksLoop:
 		}
 		close(blockToIndexNumCh)
 		wg.Wait()
+		time.Sleep(3 * time.Second)
 	}
 
 	close(blockInfoChan)
