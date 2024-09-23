@@ -14,8 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-const workerNum = 5
-
 type BlockInfo struct {
 	Number    uint64
 	Hash      string
@@ -23,7 +21,19 @@ type BlockInfo struct {
 	Timestamp uint64
 }
 
-func Start(rpc string, start uint64, out string, limit uint64) {
+func Start(rpc string, start uint64, out string, limit uint64, workers int) {
+	if start < 1 {
+		log.Fatal("Start block must be greater than 0")
+	}
+
+	if limit < 1 {
+		log.Fatal("Block limit must be greater than 0")
+	}
+
+	if workers < 1 {
+		log.Fatal("Workers count must be greater than 0")
+	}
+
 	client, err := ethclient.Dial(rpc)
 
 	if err != nil {
@@ -59,7 +69,7 @@ func Start(rpc string, start uint64, out string, limit uint64) {
 	go writeBlocksToFile(start, blockInfoChan, out, writerFinishedChan)
 
 	wg := &sync.WaitGroup{}
-	for i := 0; i < workerNum; i++ {
+	for i := 0; i < workers; i++ {
 		log.Println("Starting worker: ", i)
 		wg.Add(1)
 		go startWorker(client, blockToIndexNumCh, wg, isBlockIndexedMap, blockInfoChan)
@@ -121,7 +131,7 @@ newBlocksLoop:
 		blockToIndexNumCh := make(chan uint64)
 		wg = &sync.WaitGroup{}
 
-		for i := 0; (i < workerNum) && (i < len(skippedBlocksNums)); i++ {
+		for i := 0; (i < workers) && (i < len(skippedBlocksNums)); i++ {
 			log.Println("Starting worker: ", i)
 			wg.Add(1)
 			go startWorker(client, blockToIndexNumCh, wg, isBlockIndexedMap, blockInfoChan)
