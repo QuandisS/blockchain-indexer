@@ -2,9 +2,12 @@ package indexer
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math/big"
+	"os"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -12,6 +15,13 @@ import (
 )
 
 const workerNum = 5
+
+type BlockInfo struct {
+	Number    uint64
+	Hash      string
+	TxCount   int
+	Timestamp uint64
+}
 
 func Start(rpc string, start uint64, out string, limit uint64) {
 	client, err := ethclient.Dial(rpc)
@@ -21,7 +31,6 @@ func Start(rpc string, start uint64, out string, limit uint64) {
 	}
 	defer client.Close()
 
-	// TODO make a check for skipped blocks
 	lastBlockNum, err := client.BlockNumber(context.Background())
 
 	if err != nil {
@@ -44,12 +53,16 @@ func Start(rpc string, start uint64, out string, limit uint64) {
 
 	log.Println("Indexing from block: ", start, " to block: ", start+limit-1)
 	blockToIndexNumCh := make(chan uint64)
+	blockInfoChan := make(chan BlockInfo)
+	writerFinishedChan := make(chan struct{})
+
+	go writeBlocksToFile(start, blockInfoChan, out, writerFinishedChan)
 
 	wg := &sync.WaitGroup{}
 	for i := 0; i < workerNum; i++ {
 		log.Println("Starting worker: ", i)
 		wg.Add(1)
-		go startWorker(client, blockToIndexNumCh, wg, isBlockIndexedMap)
+		go startWorker(client, blockToIndexNumCh, wg, isBlockIndexedMap, blockInfoChan)
 	}
 
 	for blockNum := start; (blockNum <= lastBlockNum) && (blockNum < start+limit); blockNum++ {
@@ -111,7 +124,7 @@ newBlocksLoop:
 		for i := 0; (i < workerNum) && (i < len(skippedBlocksNums)); i++ {
 			log.Println("Starting worker: ", i)
 			wg.Add(1)
-			go startWorker(client, blockToIndexNumCh, wg, isBlockIndexedMap)
+			go startWorker(client, blockToIndexNumCh, wg, isBlockIndexedMap, blockInfoChan)
 		}
 
 		for _, blockNum := range skippedBlocksNums {
@@ -122,10 +135,13 @@ newBlocksLoop:
 		wg.Wait()
 	}
 
+	close(blockInfoChan)
+
+	<-writerFinishedChan
 	log.Println("Done!")
 }
 
-func startWorker(client *ethclient.Client, blockToIndexNumCh <-chan uint64, wg *sync.WaitGroup, isBlockIndexedMap *sync.Map) {
+func startWorker(client *ethclient.Client, blockToIndexNumCh <-chan uint64, wg *sync.WaitGroup, isBlockIndexedMap *sync.Map, out chan<- BlockInfo) {
 	for blockNum := range blockToIndexNumCh {
 		// skip block if it is not planned for indexing
 		if _, ok := isBlockIndexedMap.Load(blockNum); !ok {
@@ -138,7 +154,43 @@ func startWorker(client *ethclient.Client, blockToIndexNumCh <-chan uint64, wg *
 		}
 
 		log.Println("Indexing block: ", blockNum, " hash: ", block.Hash().Hex())
+		out <- BlockInfo{
+			Number:    blockNum,
+			Hash:      block.Hash().Hex(),
+			TxCount:   len(block.Transactions()),
+			Timestamp: block.Time(),
+		}
 		isBlockIndexedMap.Store(blockNum, true)
 	}
 	wg.Done()
+}
+
+func writeBlocksToFile(start uint64, blockInfoChan <-chan BlockInfo, out string, finished chan<- struct{}) {
+	file, err := os.OpenFile(out, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	nextToWriteNum := start
+	toWrite := make(map[uint64]BlockInfo)
+
+	for blockInfo := range blockInfoChan {
+		toWrite[blockInfo.Number] = blockInfo
+
+		for {
+			if blockInfoToWrite, ok := toWrite[nextToWriteNum]; ok {
+				nextToWriteNum++
+				t := time.Unix(int64(blockInfoToWrite.Timestamp), 0).UTC()
+				log.Println("Writing block: ", blockInfoToWrite.Number, " hash: ", blockInfoToWrite.Hash)
+
+				if _, err := file.WriteString(fmt.Sprintln("Number: ", blockInfoToWrite.Number, " Hash: ", blockInfoToWrite.Hash, "TxCount:", blockInfoToWrite.TxCount, "Timestamp:", t.Format(time.RFC3339))); err != nil {
+					log.Println("Failed to write block: ", blockInfoToWrite.Number, " error: ", err)
+				}
+				continue
+			}
+			break
+		}
+	}
+	finished <- struct{}{}
 }
